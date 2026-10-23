@@ -66,19 +66,19 @@ local function initializeEngine(character)
 	local RightShoulder = Torso and Torso:WaitForChild("Right Shoulder", 5)
 	local LeftShoulder = Torso and Torso:WaitForChild("Left Shoulder", 5)
 
-	-- Store standard R6 joint resting matrices
+	-- Absolute resting R6 joint baseline coordinates
 	local originalRightC0 = CFrame.new(1, 0.5, 0) * CFrame.Angles(0, math.pi/2, 0)
 	local originalLeftC0 = CFrame.new(-1, 0.5, 0) * CFrame.Angles(0, -math.pi/2, 0)
-	-- FIXED SHOULDER MOTOR CONTROLLER: Flips joint CFrames 180 degrees forward
+	-- FIXED SHOULDER MOTOR CONTROLLER: Swings the joints 90 degrees directly forward
 	armJointLoop = RunService.Stepped:Connect(function()
 		if Humanoid.Health <= 0 or not RightShoulder or not LeftShoulder then return end
 		
-		-- Override animation engine properties on these joints
+		-- Override animation engine transformations completely
 		RightShoulder.Transform = CFrame.new()
 		LeftShoulder.Transform = CFrame.new()
 
 		if isFlying and not reachedPeakAltitude then
-			-- 1. ASCENDING FLIGHT STATE: Point arms 90 degrees straight up to the sky
+			-- 1. ASCENDING FLIGHT STATE: Smoothly pivot arms up to face the sky
 			armLiftProgress = math.min(1, armLiftProgress + (1/60 * 6))
 			
 			local rightSky = originalRightC0 * CFrame.Angles(0, 0, math.rad(90))
@@ -87,11 +87,12 @@ local function initializeEngine(character)
 			RightShoulder.C0 = originalRightC0:Lerp(rightSky, armLiftProgress)
 			LeftShoulder.C0 = originalLeftC0:Lerp(leftSky, armLiftProgress)
 		else
-			-- 2. STANDARD LOCKED STATE: Rotated 180 degrees to face fully forward in front of chest
+			-- 2. ZOMBIE/ROBOTIC STATE: Pivot joints 90 degrees forward around the body axis
 			armLiftProgress = math.max(0, armLiftProgress - (1/60 * 6))
 			
-			local rightZombie = originalRightC0 * CFrame.Angles(math.rad(-90), 0, 0)
-			local leftZombie = originalLeftC0 * CFrame.Angles(math.rad(-90), 0, 0)
+			-- Corrected angle rotation matrices to project limbs out from chest
+			local rightZombie = originalRightC0 * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
+			local leftZombie = originalLeftC0 * CFrame.Angles(math.rad(90), math.rad(-90), 0)
 			
 			RightShoulder.C0 = originalRightC0:Lerp(rightZombie, 1 - armLiftProgress)
 			LeftShoulder.C0 = originalLeftC0:Lerp(leftZombie, 1 - armLiftProgress)
