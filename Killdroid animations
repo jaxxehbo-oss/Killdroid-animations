@@ -65,24 +65,24 @@ local function initializeEngine(character)
 	local Torso = character:WaitForChild("Torso", 5)
 	local RightShoulder = Torso and Torso:WaitForChild("Right Shoulder", 5)
 	local LeftShoulder = Torso and Torso:WaitForChild("Left Shoulder", 5)
-	-- FIXED TRANSFORM MOTOR RECONSTRUCTION: Upgraded to 95 degrees for absolute straight-forward parallel lines
+	-- FIXED TRANSFORM MOTOR RECONSTRUCTION: Upgraded flight ascent pivot vectors to full 180 degrees
 	armJointLoop = RunService.Stepped:Connect(function()
 		if Humanoid.Health <= 0 or not RightShoulder or not LeftShoulder then return end
 
 		if isFlying and not reachedPeakAltitude then
-			-- 1. ASCENDING FLIGHT STATE: Smoothly pivot arms up to face the sky
+			-- 1. ASCENDING FLIGHT STATE: Smoothly pivot arms 180 degrees up during initial takeoff climb
 			armLiftProgress = math.min(1, armLiftProgress + (1/60 * 6))
 			
-			local rightSky = CFrame.Angles(0, 0, math.rad(90))
-			local leftSky = CFrame.Angles(0, 0, math.rad(-90))
+			-- Angle values modified to 180 degrees 
+			local rightSky = CFrame.Angles(0, 0, math.rad(180))
+			local leftSky = CFrame.Angles(0, 0, math.rad(-180))
 			
 			RightShoulder.Transform = CFrame.new():Lerp(rightSky, armLiftProgress)
 			LeftShoulder.Transform = CFrame.new():Lerp(leftSky, armLiftProgress)
 		else
-			-- 2. FINAL PERFECT ZOMBIE POSE: Balanced horizontal alignment prevents twisting or torso clipping
+			-- 2. STANDING/MOVING ROBOTIC ZOMBIE POSITION: Restores the straight forward 95-degree alignment
 			armLiftProgress = math.max(0, armLiftProgress - (1/60 * 6))
 			
-			-- Angle values updated to 95 degrees to lock limbs completely straight forward
 			local rightZombie = CFrame.Angles(math.rad(90), 0, math.rad(95))
 			local leftZombie = CFrame.Angles(math.rad(90), 0, math.rad(-95))
 			
