@@ -1,0 +1,362 @@
+-- GLOBAL EXECUTOR COMPATIBLE FLIGHT & ANIMATION SYSTEM
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local physicsLoop = nil
+local armJointLoop = nil
+local flightMoveLoop = nil
+local descentLoop = nil
+
+-- State Parameters
+local isFlying = false
+local flightForce = nil
+local flightAttachment = nil
+local targetPlayer = nil
+local targetDecal = nil
+local reachedPeakAltitude = false
+local landingActive = false
+local landingTime = 0
+local LAND_DURATION = 0.4 
+local currentTrack = nil
+local wasMidAir = false
+local armLiftProgress = 0
+
+-- Custom Decal Asset Target Configuration (Crosshair overlay)
+local LOCKON_IMAGE_ID = "rbxassetid://9073155799" 
+
+-- Helper: Locate closest player to lock onto
+local function getClosestPlayer(rootPart)
+	local closest = nil
+	local shortestDistance = math.huge
+	if not rootPart then return nil end
+
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
+			local distance = (rootPart.Position - p.Character.HumanoidRootPart.Position).Magnitude
+			if distance < shortestDistance then
+				shortestDistance = distance
+				closest = p.Character
+			end
+		end
+	end
+	return closest
+end
+
+-- Helper: Handle target decal generation and deletion
+local function clearTargetDecal()
+	if targetDecal then
+		targetDecal:Destroy()
+		targetDecal = nil
+	end
+end
+
+local function applyTargetDecal(characterModel)
+	clearTargetDecal()
+	local head = characterModel:FindFirstChild("Head")
+	if not head then return end
+
+	targetDecal = Instance.new("Decal")
+	targetDecal.Name = "KilldroidLockonDecal"
+	targetDecal.Texture = LOCKON_IMAGE_ID
+	targetDecal.Face = Enum.NormalId.Front 
+	targetDecal.Parent = head
+end
+
+-- Central Execution Wrapper Hook
+local function initializeEngine(character)
+	-- Disconnect previous loop memory pools on lifecycle reset
+	if physicsLoop then physicsLoop:Disconnect(); physicsLoop = nil end
+	if armJointLoop then armJointLoop:Disconnect(); armJointLoop = nil end
+	if flightMoveLoop then flightMoveLoop:Disconnect(); flightMoveLoop = nil end
+	if descentLoop then descentLoop:Disconnect(); descentLoop = nil end
+	clearTargetDecal()
+	isFlying = false
+	reachedPeakAltitude = false
+
+	local Humanoid = character:WaitForChild("Humanoid")
+	local RootPart = character:WaitForChild("HumanoidRootPart")
+
+	-- RIG ADAPTER: Safely detect R6 vs R15 components to prevent script timeouts
+	local Torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("LowerTorso")
+	local RightShoulder = nil
+	local LeftShoulder = nil
+
+	if Torso then
+		RightShoulder = Torso:FindFirstChild("Right Shoulder") or character:FindFirstChild("RightShoulder", true)
+		LeftShoulder = Torso:FindFirstChild("Left Shoulder") or character:FindFirstChild("LeftShoulder", true)
+	end
+
+	local originalRightC0 = RightShoulder and RightShoulder.C0 or nil
+	local originalLeftC0 = LeftShoulder and LeftShoulder.C0 or nil
+
+	-- STEP 1 CONFIGURATION: Build standard storage animations
+	local anims = {
+		Idle = Instance.new("Animation"),
+		Run  = Instance.new("Animation"),
+		Fly  = Instance.new("Animation"),
+		Land = Instance.new("Animation")
+	}
+
+	anims.Idle.AnimationId = "rbxassetid://99812371351441" 
+	anims.Run.AnimationId  = "rbxassetid://137261428370749" 
+	anims.Fly.AnimationId  = "rbxassetid://96433684625293" 
+	anims.Land.AnimationId = "rbxassetid://115806898516982" 
+
+	local Animator = Humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", Humanoid)
+
+	local tracks = {}
+	pcall(function()
+		for name, anim in pairs(anims) do
+			tracks[name] = Animator:LoadAnimation(anim)
+			tracks[name].Priority = Enum.AnimationPriority.Action3
+		end
+	end)
+
+	-- Wipe out Roblox's default core animate scripts cleanly
+	local nativeAnimate = character:FindFirstChild("Animate")
+	if nativeAnimate then
+		nativeAnimate.Disabled = true
+		nativeAnimate:Destroy()
+	end
+
+	for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do
+		track:Stop(0)
+	end
+
+	local function playTrack(targetTrack)
+		if not targetTrack then return end
+		if currentTrack ~= targetTrack then
+			if currentTrack then currentTrack:Stop(0.1) end
+			currentTrack = targetTrack
+
+			if targetTrack == tracks.Run or targetTrack == tracks.Idle or targetTrack == tracks.Fly then
+				currentTrack.Looped = true
+			else
+				currentTrack.Looped = false
+			end
+			currentTrack:Play(0.1)
+		else
+			if currentTrack and not currentTrack.IsPlaying then currentTrack:Play(0) end
+		end
+	end
+
+	-- RUNTIME ANIMATION ENGINE LOOP
+	physicsLoop = RunService.PostSimulation:Connect(function()
+		if not character or not character:IsDescendantOf(workspace) or Humanoid.Health <= 0 then
+			return
+		end
+
+		local isMidAir = (Humanoid.FloorMaterial == Enum.Material.Air)
+		local horizontalVelocity = (RootPart.AssemblyLinearVelocity * Vector3.new(1, 0, 1)).Magnitude
+		local isMoving = (Humanoid.MoveDirection.Magnitude > 0) and (horizontalVelocity > 0.8)
+
+		if wasMidAir and not isMidAir and not isFlying then
+			landingActive = true
+			landingTime = os.clock()
+		end
+		wasMidAir = isMidAir 
+
+		if landingActive and (os.clock() - landingTime > LAND_DURATION) then
+			landingActive = false
+		end
+
+		-- STATE ENGINE ROUTING TREE
+		if isFlying then
+			landingActive = false
+			if reachedPeakAltitude then
+				playTrack(tracks.Idle)
+			else
+				playTrack(tracks.Fly)
+			end
+		elseif isMidAir then
+			landingActive = false 
+			playTrack(tracks.Fly)
+		elseif landingActive then
+			playTrack(tracks.Land)
+		else
+			if isMoving then
+				playTrack(tracks.Run)
+				if currentTrack and currentTrack == tracks.Run and currentTrack.IsPlaying then 
+					currentTrack:AdjustSpeed(horizontalVelocity / 16) 
+				end
+			else
+				playTrack(tracks.Idle)
+			end
+		end
+	end)
+
+	-- Dynamic Arm Rotation Lerp Controller
+	armJointLoop = RunService.Stepped:Connect(function(_, deltaTime)
+		deltaTime = deltaTime or (1/60)
+		if Humanoid.Health <= 0 then return end
+
+		local shouldRaiseArms = isFlying and not reachedPeakAltitude
+
+		if RightShoulder and LeftShoulder and originalRightC0 and originalLeftC0 then
+			if shouldRaiseArms then
+				armLiftProgress = math.min(1, armLiftProgress + (deltaTime * 5))
+				local rightTarget = originalRightC0 * CFrame.Angles(0, 0, math.rad(90))
+				local leftTarget = originalLeftC0 * CFrame.Angles(0, 0, math.rad(-90))
+
+				RightShoulder.C0 = originalRightC0:Lerp(rightTarget, armLiftProgress)
+				LeftShoulder.C0 = originalLeftC0:Lerp(leftTarget, armLiftProgress)
+			else
+				armLiftProgress = math.max(0, armLiftProgress - (deltaTime * 5))
+				RightShoulder.C0 = originalRightC0:Lerp(originalRightC0, armLiftProgress)
+				LeftShoulder.C0 = originalLeftC0:Lerp(originalLeftC0, armLiftProgress)
+			end
+		end
+	end)
+
+	-- FLIGHT INTERACTIVE MECHANICS UI MOUNT
+	local function createFlightUI()
+		local existingGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("FlightGui")
+		if existingGui then existingGui:Destroy() end
+
+		local screenGui = Instance.new("ScreenGui")
+		screenGui.Name = "FlightGui"
+		screenGui.ResetOnSpawn = true
+
+		local button = Instance.new("TextButton")
+		button.Name = "FlightButton"
+		button.Size = UDim2.new(0, 120, 0, 50)
+		button.Position = UDim2.new(0, 30, 1, -80)
+		button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+		button.TextColor3 = Color3.fromRGB(255, 255, 255)
+		button.TextSize = 18
+		button.Font = Enum.Font.SourceSansBold
+		button.Text = "Flight: OFF"
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = button
+
+		button.Parent = screenGui
+		screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+		button.MouseButton1Click:Connect(function()
+			if not RootPart or Humanoid.Health <= 0 then return end
+
+			if not isFlying then
+				isFlying = true
+				reachedPeakAltitude = false
+				button.Text = "Flight: ON"
+				button.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+
+				-- 1. Freeze character
+				RootPart.Anchored = true
+				task.wait(1)
+				if not RootPart or Humanoid.Health <= 0 then isFlying = false return end
+				RootPart.Anchored = false
+
+				if not isFlying then return end
+
+				-- 2. Setup physics vector constraints
+				flightAttachment = Instance.new("Attachment")
+				flightAttachment.Name = "FlightAttachment"
+				flightAttachment.Parent = RootPart
+
+				flightForce = Instance.new("LinearVelocity")
+				flightForce.Name = "FlightForce"
+				flightForce.Attachment0 = flightAttachment
+				flightForce.MaxForce = math.huge
+				flightForce.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+				flightForce.Parent = RootPart
+
+				local targetYHeight = RootPart.Position.Y + 20
+
+				targetPlayer = getClosestPlayer(RootPart)
+				if targetPlayer then
+					applyTargetDecal(targetPlayer)
+				end
+
+				-- 3. INTERACTIVE MOVEMENT & TARGET RUNTIME LOOP
+				flightMoveLoop = RunService.RenderStepped:Connect(function()
+					if not isFlying or not RootPart or Humanoid.Health <= 0 then
+						if flightMoveLoop then flightMoveLoop:Disconnect(); flightMoveLoop = nil end
+						return
+					end
+
+					local moveDir = Humanoid.MoveDirection
+					local horizontalX = moveDir.X * 19
+					local horizontalZ = moveDir.Z * 19
+					local verticalY = 0
+
+					-- Ascent Logic Handler
+					if not reachedPeakAltitude then
+						if RootPart.Position.Y < targetYHeight then
+							verticalY = 15 
+						else
+							reachedPeakAltitude = true 
+							verticalY = 0
+						end
+					else
+						verticalY = 0 
+					end
+
+					flightForce.VectorVelocity = Vector3.new(horizontalX, verticalY, horizontalZ)
+
+					-- Face Closest Enemy Tracking Mechanics
+					targetPlayer = getClosestPlayer(RootPart) 
+					if targetPlayer and targetPlayer:FindFirstChild("HumanoidRootPart") and targetPlayer.Humanoid.Health > 0 then
+						local targetRoot = targetPlayer.HumanoidRootPartapplyTargetDecal(targetPlayer)
+						Camera.CameraType = Enum.CameraType.Scriptable
+						Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetRoot.Position)
+						local lookPos = Vector3.new(targetRoot.Position.X, RootPart.Position.Y, targetRoot.Position.Z)
+						RootPart.CFrame = CFrame.new(RootPart.Position, lookPos)
+					else
+						Camera.CameraType = Enum.CameraType.Custom
+						clearTargetDecal()
+					end
+				end)
+			else
+				-- Flight Disengaged (Initiating Guided Slow Descent)
+				reachedPeakAltitude = false
+				button.Text = "Flight: OFF"
+				button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+				if flightForce then
+					if flightMoveLoop then flightMoveLoop:Disconnect(); flightMoveLoop = nil end
+					descentLoop = RunService.RenderStepped:Connect(function()
+						if isFlying or not RootPart or Humanoid.Health <= 0 or Humanoid.FloorMaterial ~= Enum.Material.Air then
+							if descentLoop then descentLoop:Disconnect(); descentLoop = nil end
+							return
+						end
+						local moveDir = Humanoid.MoveDirection
+						flightForce.VectorVelocity = Vector3.new(moveDir.X * 19, -5, moveDir.Z * 19)
+						targetPlayer = getClosestPlayer(RootPart)
+						if targetPlayer and targetPlayer:FindFirstChild("HumanoidRootPart") and targetPlayer.Humanoid.Health > 0 then
+							local targetRoot = targetPlayer.HumanoidRootPart
+							local lookPos = Vector3.new(targetRoot.Position.X, RootPart.Position.Y, targetRoot.Position.Z)
+							RootPart.CFrame = CFrame.new(RootPart.Position, lookPos)
+						end
+					end)
+					while not isFlying and Humanoid.FloorMaterial == Enum.Material.Air do
+						RunService.Heartbeat:Wait()
+						if not Humanoid or Humanoid.Health <= 0 then break end
+					end
+				end
+				-- Reset Environment States upon floor contact
+				isFlying = false
+				Camera.CameraType = Enum.CameraType.Custom
+				clearTargetDecal()
+				targetPlayer = nil
+				if flightForce then flightForce:Destroy(); flightForce = nil end
+				if flightAttachment then flightAttachment:Destroy(); flightAttachment = nil end
+				landingActive = true
+				landingTime = os.clock()
+			end
+		end)
+	end
+	createFlightUI()
+end
+-- Initialize safely on execution if character is already fully alive
+if LocalPlayer.Character then
+	task.spawn(initializeEngine, LocalPlayer.Character)
+end
+-- Persist script engine seamlessly over death/respawn life cycles
+LocalPlayer.CharacterAdded:Connect(function(newCharacter)
+	initializeEngine(newCharacter)
+end)
+
