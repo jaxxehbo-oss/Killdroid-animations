@@ -204,8 +204,6 @@ local function initializeEngine(character)
 				flightForce.Parent = RootPart
 
 				local targetYHeight = RootPart.Position.Y + 20
-				targetPlayer = getClosestPlayer(RootPart)
-				if targetPlayer then applyTargetDecal(targetPlayer) end
 
 				flightMoveLoop = RunService.RenderStepped:Connect(function()
 					if not isFlying or not RootPart or Humanoid.Health <= 0 then
@@ -222,6 +220,7 @@ local function initializeEngine(character)
 					flightForce.VectorVelocity = Vector3.new(moveDir.X * 19, verticalY, moveDir.Z * 19)
 					targetPlayer = getClosestPlayer(RootPart) 
 					
+					-- FIXED: Camera dynamic validation hook. Keeps camera normal if no targets are around
 					if targetPlayer and targetPlayer:FindFirstChild("HumanoidRootPart") and targetPlayer.Humanoid.Health > 0 then
 						local targetRoot = targetPlayer.HumanoidRootPart
 						applyTargetDecal(targetPlayer)
