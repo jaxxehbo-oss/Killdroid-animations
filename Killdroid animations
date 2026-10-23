@@ -69,7 +69,7 @@ local function initializeEngine(character)
 	-- Hardcoded base offsets to decouple rotations from package shape variances
 	local originalRightC0 = CFrame.new(1, 0.5, 0) * CFrame.Angles(0, math.pi/2, 0)
 	local originalLeftC0 = CFrame.new(-1, 0.5, 0) * CFrame.Angles(0, -math.pi/2, 0)
-	-- FIXED PACKAGE-ADAPTED MOTOR ENGINE: Forces parallel forward posture
+	-- FIXED POSITION MOTOR ENGINE: Swings arms 90 degrees horizontally to face fully forward
 	armJointLoop = RunService.Stepped:Connect(function()
 		if Humanoid.Health <= 0 or not RightShoulder or not LeftShoulder then return end
 		
@@ -87,12 +87,12 @@ local function initializeEngine(character)
 			RightShoulder.C0 = originalRightC0:Lerp(rightSky, armLiftProgress)
 			LeftShoulder.C0 = originalLeftC0:Lerp(leftSky, armLiftProgress)
 		else
-			-- 2. PARALLEL ZOMBIE RECONSTRUCTION: Aligns rotation directions perfectly forward
+			-- 2. PARALLEL ZOMBIE RECONSTRUCTION: Corrected angles to rotate arms fully forward instead of outward
 			armLiftProgress = math.max(0, armLiftProgress - (1/60 * 6))
 			
-			-- Multiplied matrices to point both limbs 90 degrees out from the front torso shell
-			local rightZombie = originalRightC0 * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-			local leftZombie = originalLeftC0 * CFrame.Angles(math.rad(-90), math.rad(90), 0)
+			-- Multiplied matrices along the local Y axis to swing limbs completely frontward
+			local rightZombie = originalRightC0 * CFrame.Angles(math.rad(-90), 0, math.rad(-90))
+			local leftZombie = originalLeftC0 * CFrame.Angles(math.rad(-90), 0, math.rad(90))
 			
 			RightShoulder.C0 = originalRightC0:Lerp(rightZombie, 1 - armLiftProgress)
 			LeftShoulder.C0 = originalLeftC0:Lerp(leftZombie, 1 - armLiftProgress)
