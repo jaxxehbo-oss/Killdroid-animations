@@ -75,10 +75,12 @@ local function initializeEngine(character)
 		Fly  = Instance.new("Animation"),
 		Land = Instance.new("Animation")
 	}
-	anims.Idle.AnimationId = "rbxassetid://15222046462" 
-	anims.Run.AnimationId  = "rbxassetid://15222071131" 
-	anims.Fly.AnimationId  = "rbxassetid://1144078604"  
-	anims.Land.AnimationId = "rbxassetid://18130996"    
+
+	-- Universal verified fallback animation layers
+	anims.Idle.AnimationId = "rbxassetid://181524222" 
+	anims.Run.AnimationId  = "rbxassetid://180261368" 
+	anims.Fly.AnimationId  = "rbxassetid://1144078604" 
+	anims.Land.AnimationId = "rbxassetid://18130996"   
 
 	local Animator = Humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", Humanoid)
 	local tracks = {}
@@ -138,19 +140,33 @@ local function initializeEngine(character)
 		end
 	end)
 
+	-- JOINT MOTOR CONTROLLER: Forcibly shapes R6 rig joints directly
 	armJointLoop = RunService.Stepped:Connect(function(_, deltaTime)
 		deltaTime = deltaTime or (1/60)
-		if Humanoid.Health <= 0 then return end
-		if RightShoulder and LeftShoulder and originalRightC0 and originalLeftC0 then
-			if isFlying and not reachedPeakAltitude then
-				armLiftProgress = math.min(1, armLiftProgress + (deltaTime * 5))
-				RightShoulder.C0 = originalRightC0:Lerp(originalRightC0 * CFrame.Angles(0, 0, math.rad(90)), armLiftProgress)
-				LeftShoulder.C0 = originalLeftC0:Lerp(originalLeftC0 * CFrame.Angles(0, 0, math.rad(-90)), armLiftProgress)
-			else
-				armLiftProgress = math.max(0, armLiftProgress - (deltaTime * 5))
-				RightShoulder.C0 = originalRightC0:Lerp(originalRightC0, armLiftProgress)
-				LeftShoulder.C0 = originalLeftC0:Lerp(originalLeftC0, armLiftProgress)
-			end
+		if Humanoid.Health <= 0 or not RightShoulder or not LeftShoulder or not originalRightC0 or not originalLeftC0 then return end
+		
+		local horizontalVelocity = (RootPart.AssemblyLinearVelocity * Vector3.new(1, 0, 1)).Magnitude
+		local isMovingOnGround = (Humanoid.FloorMaterial ~= Enum.Material.Air) and (Humanoid.MoveDirection.Magnitude > 0) and (horizontalVelocity > 0.8)
+
+		if isFlying and not reachedPeakAltitude then
+			-- 1. ASCENDING FLIGHT STATE: Arms pointed 90 degrees straight up to the sky
+			armLiftProgress = math.min(1, armLiftProgress + (deltaTime * 5))
+			local rightSky = originalRightC0 * CFrame.Angles(0, 0, math.rad(90))
+			local leftSky = originalLeftC0 * CFrame.Angles(0, 0, math.rad(-90))
+			RightShoulder.C0 = originalRightC0:Lerp(rightSky, armLiftProgress)
+			LeftShoulder.C0 = originalLeftC0:Lerp(leftSky, armLiftProgress)
+		elseif isMovingOnGround and not isFlying then
+			-- 2. GROUND RUNNING STATE: Forcibly extend arms straight forward (Zombie/Robotic style)
+			armLiftProgress = math.min(1, armLiftProgress + (deltaTime * 5))
+			local rightZombie = originalRightC0 * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
+			local leftZombie = originalLeftC0 * CFrame.Angles(math.rad(-90), math.rad(90), 0)
+			RightShoulder.C0 = originalRightC0:Lerp(rightZombie, armLiftProgress)
+			LeftShoulder.C0 = originalLeftC0:Lerp(leftZombie, armLiftProgress)
+		else
+			-- 3. HOVERING/IDLE/RESTING STATES: Drop back smoothly to let default loops function
+			armLiftProgress = math.max(0, armLiftProgress - (deltaTime * 5))
+			RightShoulder.C0 = originalRightC0:Lerp(originalRightC0, armLiftProgress)
+			LeftShoulder.C0 = originalLeftC0:Lerp(originalLeftC0, armLiftProgress)
 		end
 	end)
 
@@ -220,15 +236,13 @@ local function initializeEngine(character)
 					flightForce.VectorVelocity = Vector3.new(moveDir.X * 19, verticalY, moveDir.Z * 19)
 					targetPlayer = getClosestPlayer(RootPart) 
 					
-					-- FIXED: Camera dynamic validation hook. Keeps camera normal if no targets are around
 					if targetPlayer and targetPlayer:FindFirstChild("HumanoidRootPart") and targetPlayer.Humanoid.Health > 0 then
 						local targetRoot = targetPlayer.HumanoidRootPart
 						applyTargetDecal(targetPlayer)
-						Camera.CameraType = Enum.CameraType.Scriptable
-						Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetRoot.Position)
-						RootPart.CFrame = CFrame.new(RootPart.Position, Vector3.new(targetRoot.Position.X, RootPart.Position.Y, targetRoot.Position.Z))
+						
+						-- FIXED 3D CFRAME LIFT: Entire character model tilts up or drops down to physically look at the target in 3D
+						RootPart.CFrame = CFrame.new(RootPart.Position, targetRoot.Position)
 					else
-						Camera.CameraType = Enum.CameraType.Custom
 						clearTargetDecal()
 					end
 				end)
@@ -247,13 +261,13 @@ local function initializeEngine(character)
 						targetPlayer = getClosestPlayer(RootPart)
 						if targetPlayer and targetPlayer:FindFirstChild("HumanoidRootPart") and targetPlayer.Humanoid.Health > 0 then
 							local targetRoot = targetPlayer.HumanoidRootPart
-							RootPart.CFrame = CFrame.new(RootPart.Position, Vector3.new(targetRoot.Position.X, RootPart.Position.Y, targetRoot.Position.Z))
+							-- Maintain full 3D pitch alignment while descending
+							RootPart.CFrame = CFrame.new(RootPart.Position, targetRoot.Position)
 						end
 					end)
 					while not isFlying and Humanoid.FloorMaterial == Enum.Material.Air do RunService.Heartbeat:Wait() end
 				end
 				isFlying = false
-				Camera.CameraType = Enum.CameraType.Custom
 				clearTargetDecal()
 				targetPlayer = nil
 				if flightForce then flightForce:Destroy(); flightForce = nil end
