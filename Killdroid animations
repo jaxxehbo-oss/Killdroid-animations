@@ -62,111 +62,43 @@ local function initializeEngine(character)
 	local Humanoid = character:WaitForChild("Humanoid")
 	local RootPart = character:WaitForChild("HumanoidRootPart")
 
-	local Torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("LowerTorso")
-	local RightShoulder = Torso and (Torso:FindFirstChild("Right Shoulder") or character:FindFirstChild("RightShoulder", true))
-	local LeftShoulder = Torso and (Torso:FindFirstChild("Left Shoulder") or character:FindFirstChild("LeftShoulder", true))
+	local Torso = character:WaitForChild("Torso", 5)
+	local RightShoulder = Torso and Torso:WaitForChild("Right Shoulder", 5)
+	local LeftShoulder = Torso and Torso:WaitForChild("Left Shoulder", 5)
 
-	local originalRightC0 = RightShoulder and RightShoulder.C0 or nil
-	local originalLeftC0 = LeftShoulder and LeftShoulder.C0 or nil
+	-- Store base resting configurations explicitly
+	local originalRightC0 = CFrame.new(1, 0.5, 0) * CFrame.Angles(0, math.pi/2, 0)
+	local originalLeftC0 = CFrame.new(-1, 0.5, 0) * CFrame.Angles(0, -math.pi/2, 0)
 
-	local anims = {
-		Idle = Instance.new("Animation"),
-		Run  = Instance.new("Animation"),
-		Fly  = Instance.new("Animation"),
-		Land = Instance.new("Animation")
-	}
-
-	-- Universal verified fallback animation layers
-	anims.Idle.AnimationId = "rbxassetid://181524222" 
-	anims.Run.AnimationId  = "rbxassetid://180261368" 
-	anims.Fly.AnimationId  = "rbxassetid://1144078604" 
-	anims.Land.AnimationId = "rbxassetid://18130996"   
-
+	-- Leave native Roblox Animate scripts fully running so leg/hip movement tracks never break
 	local Animator = Humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", Humanoid)
-	local tracks = {}
-	pcall(function()
-		for name, anim in pairs(anims) do
-			tracks[name] = Animator:LoadAnimation(anim)
-			tracks[name].Priority = Enum.AnimationPriority.Action3
-		end
-	end)
-
-	local nativeAnimate = character:FindFirstChild("Animate")
-	if nativeAnimate then nativeAnimate.Disabled = true; nativeAnimate:Destroy() end
-
-	for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do track:Stop(0) end
-
-	local function playTrack(targetTrack)
-		if not targetTrack then return end
-		if currentTrack ~= targetTrack then
-			if currentTrack then currentTrack:Stop(0.1) end
-			currentTrack = targetTrack
-			currentTrack.Looped = (targetTrack == tracks.Run or targetTrack == tracks.Idle or targetTrack == tracks.Fly)
-			currentTrack:Play(0.1)
-		else
-			if currentTrack and not currentTrack.IsPlaying then currentTrack:Play(0) end
-		end
-	end
-	physicsLoop = RunService.PostSimulation:Connect(function()
-		if not character or not character:IsDescendantOf(workspace) or Humanoid.Health <= 0 then return end
-		local isMidAir = (Humanoid.FloorMaterial == Enum.Material.Air)
-		local horizontalVelocity = (RootPart.AssemblyLinearVelocity * Vector3.new(1, 0, 1)).Magnitude
-		local isMoving = (Humanoid.MoveDirection.Magnitude > 0) and (horizontalVelocity > 0.8)
+	-- PERMANENT SHOULDER MOTOR OVERRIDE LOOP
+	armJointLoop = RunService.Stepped:Connect(function()
+		if Humanoid.Health <= 0 or not RightShoulder or not LeftShoulder then return end
 		
-		if wasMidAir and not isMidAir and not isFlying then
-			landingActive = true
-			landingTime = os.clock()
-		end
-		wasMidAir = isMidAir 
-
-		if landingActive and (os.clock() - landingTime > LAND_DURATION) then landingActive = false end
-
-		if isFlying then
-			landingActive = false
-			playTrack(reachedPeakAltitude and tracks.Idle or tracks.Fly)
-		elseif isMidAir then
-			landingActive = false; playTrack(tracks.Fly)
-		elseif landingActive then
-			playTrack(tracks.Land)
-		else
-			if isMoving then
-				playTrack(tracks.Run)
-				if currentTrack and currentTrack == tracks.Run and currentTrack.IsPlaying then 
-					currentTrack:AdjustSpeed(horizontalVelocity / 16) 
-				end
-			else
-				playTrack(tracks.Idle)
-			end
-		end
-	end)
-
-	-- JOINT MOTOR CONTROLLER: Forcibly shapes R6 rig joints directly
-	armJointLoop = RunService.Stepped:Connect(function(_, deltaTime)
-		deltaTime = deltaTime or (1/60)
-		if Humanoid.Health <= 0 or not RightShoulder or not LeftShoulder or not originalRightC0 or not originalLeftC0 then return end
-		
-		local horizontalVelocity = (RootPart.AssemblyLinearVelocity * Vector3.new(1, 0, 1)).Magnitude
-		local isMovingOnGround = (Humanoid.FloorMaterial ~= Enum.Material.Air) and (Humanoid.MoveDirection.Magnitude > 0) and (horizontalVelocity > 0.8)
+		-- Explicitly disconnect tool transformations to prevent arm glitching
+		RightShoulder.Transform = CFrame.new()
+		LeftShoulder.Transform = CFrame.new()
 
 		if isFlying and not reachedPeakAltitude then
-			-- 1. ASCENDING FLIGHT STATE: Arms pointed 90 degrees straight up to the sky
-			armLiftProgress = math.min(1, armLiftProgress + (deltaTime * 5))
+			-- 1. ASCENDING FLIGHT STATE: Smoothly lerp arms up 90 degrees straight to the sky
+			armLiftProgress = math.min(1, armLiftProgress + (1/60 * 6))
+			
 			local rightSky = originalRightC0 * CFrame.Angles(0, 0, math.rad(90))
 			local leftSky = originalLeftC0 * CFrame.Angles(0, 0, math.rad(-90))
+			
 			RightShoulder.C0 = originalRightC0:Lerp(rightSky, armLiftProgress)
 			LeftShoulder.C0 = originalLeftC0:Lerp(leftSky, armLiftProgress)
-		elseif isMovingOnGround and not isFlying then
-			-- 2. GROUND RUNNING STATE: Forcibly extend arms straight forward (Zombie/Robotic style)
-			armLiftProgress = math.min(1, armLiftProgress + (deltaTime * 5))
-			local rightZombie = originalRightC0 * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-			local leftZombie = originalLeftC0 * CFrame.Angles(math.rad(-90), math.rad(90), 0)
-			RightShoulder.C0 = originalRightC0:Lerp(rightZombie, armLiftProgress)
-			LeftShoulder.C0 = originalLeftC0:Lerp(leftZombie, armLiftProgress)
 		else
-			-- 3. HOVERING/IDLE/RESTING STATES: Drop back smoothly to let default loops function
-			armLiftProgress = math.max(0, armLiftProgress - (deltaTime * 5))
-			RightShoulder.C0 = originalRightC0:Lerp(originalRightC0, armLiftProgress)
-			LeftShoulder.C0 = originalLeftC0:Lerp(originalLeftC0, armLiftProgress)
+			-- 2. STANDARD STATE (Idle, Run, Hover): Forcibly lock arms straight forward at all times
+			armLiftProgress = math.max(0, armLiftProgress - (1/60 * 6))
+			
+			-- Corrected angles to force R6 limbs forward perfectly without flipping backward
+			local rightZombie = originalRightC0 * CFrame.Angles(0, math.rad(-90), math.rad(-90))
+			local leftZombie = originalLeftC0 * CFrame.Angles(0, math.rad(90), math.rad(90))
+			
+			RightShoulder.C0 = originalRightC0:Lerp(rightZombie, 1 - armLiftProgress)
+			LeftShoulder.C0 = originalLeftC0:Lerp(leftZombie, 1 - armLiftProgress)
 		end
 	end)
 
@@ -239,8 +171,6 @@ local function initializeEngine(character)
 					if targetPlayer and targetPlayer:FindFirstChild("HumanoidRootPart") and targetPlayer.Humanoid.Health > 0 then
 						local targetRoot = targetPlayer.HumanoidRootPart
 						applyTargetDecal(targetPlayer)
-						
-						-- FIXED 3D CFRAME LIFT: Entire character model tilts up or drops down to physically look at the target in 3D
 						RootPart.CFrame = CFrame.new(RootPart.Position, targetRoot.Position)
 					else
 						clearTargetDecal()
@@ -261,7 +191,6 @@ local function initializeEngine(character)
 						targetPlayer = getClosestPlayer(RootPart)
 						if targetPlayer and targetPlayer:FindFirstChild("HumanoidRootPart") and targetPlayer.Humanoid.Health > 0 then
 							local targetRoot = targetPlayer.HumanoidRootPart
-							-- Maintain full 3D pitch alignment while descending
 							RootPart.CFrame = CFrame.new(RootPart.Position, targetRoot.Position)
 						end
 					end)
