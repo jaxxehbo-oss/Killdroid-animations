@@ -65,7 +65,7 @@ local function initializeEngine(character)
 	local Torso = character:WaitForChild("Torso", 5)
 	local RightShoulder = Torso and Torso:WaitForChild("Right Shoulder", 5)
 	local LeftShoulder = Torso and Torso:WaitForChild("Left Shoulder", 5)
-	-- FIXED TRANSFORM MOTOR RECONSTRUCTION: Rotates angles 45 degrees forward to correct the direction
+	-- FIXED TRANSFORM MOTOR RECONSTRUCTION: Rotated 25 more degrees (Total 70) for absolute front alignment
 	armJointLoop = RunService.Stepped:Connect(function()
 		if Humanoid.Health <= 0 or not RightShoulder or not LeftShoulder then return end
 
@@ -79,12 +79,12 @@ local function initializeEngine(character)
 			RightShoulder.Transform = CFrame.new():Lerp(rightSky, armLiftProgress)
 			LeftShoulder.Transform = CFrame.new():Lerp(leftSky, armLiftProgress)
 		else
-			-- 2. ZOMBIE/ROBOT RUN: Forces arms forward using inverted angles to fix the backward rotation bug
+			-- 2. PERFECT ZOMBIE EXTENSION: 70-degree offsets line the limbs up cleanly in front of your chest
 			armLiftProgress = math.max(0, armLiftProgress - (1/60 * 6))
 			
-			-- Flipped the rad values to force the shoulders out toward the front face of your character
-			local rightZombie = CFrame.Angles(math.rad(90), 0, math.rad(45))
-			local leftZombie = CFrame.Angles(math.rad(90), 0, math.rad(-45))
+			-- Updated angle rad adjustments to complete the forward parallel rotation
+			local rightZombie = CFrame.Angles(math.rad(90), 0, math.rad(70))
+			local leftZombie = CFrame.Angles(math.rad(90), 0, math.rad(-70))
 			
 			RightShoulder.Transform = CFrame.new():Lerp(rightZombie, 1 - armLiftProgress)
 			LeftShoulder.Transform = CFrame.new():Lerp(leftZombie, 1 - armLiftProgress)
